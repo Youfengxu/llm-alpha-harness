@@ -139,11 +139,33 @@ export async function complete(o: CompletionOptions): Promise<CompletionResult> 
       const detail = await res.text().catch(() => "");
       throw new Error(`${spec.id} returned ${res.status}: ${detail.slice(0, 300)}`);
     }
-    const body = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
-    const text = body.choices?.[0]?.message?.content;
+    const body = (await res.json()) as {
+      choices?: Array<{
+        finish_reason?: string;
+        message?: { content?: string; reasoning_content?: string };
+      }>;
+      usage?: { completion_tokens?: number };
+    };
+    const choice = body.choices?.[0];
+    const text = choice?.message?.content;
+
     // An empty completion is a failure, not an answer. Caching it would poison
     // every later run with a permanent blank.
     if (typeof text !== "string" || text.trim() === "") {
+      // Reasoning models emit `reasoning_content` first and only then `content`.
+      // If the budget runs out mid-thought the answer never arrives and content
+      // is empty — which looks identical to a broken model unless said plainly.
+      const reasoned = choice?.message?.reasoning_content;
+      if (choice?.finish_reason === "length" && reasoned) {
+        throw new Error(
+          `${spec.id} is a REASONING model and spent all ${body.usage?.completion_tokens ?? "?"} ` +
+          `tokens thinking without reaching an answer.\n` +
+          `  Raise maxTokens — these models need room for the trace plus the answer ` +
+          `(observed: ~570 tokens for a one-line score).\n` +
+          `  For batch scoring prefer a non-reasoning model: the trace is pure ` +
+          `overhead per item and dominates wall-clock.`
+        );
+      }
       throw new Error(`${spec.id} returned an empty completion`);
     }
 
