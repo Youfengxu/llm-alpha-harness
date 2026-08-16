@@ -83,7 +83,13 @@ class Semaphore {
   }
 }
 
-const gate = new Semaphore(parseInt(process.env.LLM_CONCURRENCY ?? "16", 10));
+/**
+ * Default 4, not 16. llama-swap serves ONE instance of a model, so concurrent
+ * requests queue rather than parallelise — eight at once pushed the last arrivals
+ * past a 120s timeout and looked like the model failing. vLLM genuinely batches
+ * and can take far more; raise LLM_CONCURRENCY when pointed at it.
+ */
+const gate = new Semaphore(parseInt(process.env.LLM_CONCURRENCY ?? "4", 10));
 
 /** Chat completion, cached. Throws on transport or API errors — never returns a placeholder. */
 export async function complete(o: CompletionOptions): Promise<CompletionResult> {
@@ -120,7 +126,7 @@ export async function complete(o: CompletionOptions): Promise<CompletionResult> 
         temperature: o.temperature ?? 0,
         max_tokens: o.maxTokens ?? 512,
       }),
-      signal: AbortSignal.timeout(o.timeoutMs ?? 120_000),
+      signal: AbortSignal.timeout(o.timeoutMs ?? 300_000),
     }).catch((e: unknown) => {
       const cause = (e as { cause?: { code?: string } })?.cause?.code ?? "";
       if (cause === "ECONNREFUSED" || cause === "ENOTFOUND" || cause === "EHOSTUNREACH") {

@@ -51,9 +51,30 @@ LAP  Apple Inc, 2023-01-15 : 1.0     full recall of realised outcomes
 LAP  Apple Inc, 2026-06-15 : 0.0     nothing
 ```
 
-That collapse is the control working. It is also why **cutoffs in
-`src/llm/models.ts` are all `null` until probed** — a plausible date recalled
-from a model card is exactly the kind of thing that looks like rigour and isn't.
+That collapse is the control working. Cutoffs stay `null` until probed — a
+plausible date recalled from a model card is exactly the kind of thing that looks
+like rigour and isn't.
+
+`scripts/probeCutoff.ts` establishes one empirically. Result for
+`muse-glimmer-30b` (control → quarterly → monthly, 72 probes, ~38 min):
+
+```
+2021-06 → 2024-04   0.50  ███████████████   knows
+2024-05             0.17  █████             transition
+2024-06 → 2026-07   0.00                    does not know
+```
+
+Recorded as **`cutoff: "2024-05-31"`** — the END of the last month showing any
+recall, not the collapse month. Erring late only costs samples; erring early
+admits contaminated ones.
+
+Note this model reports recall **binarily** (0.5 = knows, 0.0 = does not) rather
+than on a graded scale. The collapse is still sharp enough to locate, but it
+means LAP carries little within-sample variation, so the interaction
+contamination test degenerates on a purely post-cutoff sample — where every LAP
+is 0 and there is nothing for skill to co-vary with. That is the expected and
+correct outcome, not a defect: the test's job there is confirming you really are
+past the cutoff.
 
 ## Setup
 
@@ -109,7 +130,7 @@ a bare `ECONNREFUSED` from the middle of a long batch.
 
 Phase 0 core is built and tested. Not yet built:
 
-- `scripts/probeCutoff.ts` — sweep dates to establish each model's cutoff empirically
+- Cutoffs for the remaining models (only `muse-glimmer-30b` is established)
 - Point-in-time data connectors (SEC EDGAR is free; news and transcripts are not)
 - The first study (Option B — earnings events, incremental over post-earnings-announcement drift)
 

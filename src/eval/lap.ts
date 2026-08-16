@@ -79,15 +79,27 @@ function probePrompt(p: LapProbe): string {
   );
 }
 
-/** Measures LAP for one entity-date. */
-export async function measureLap(model: string, probe: LapProbe): Promise<LapResult> {
+/**
+ * Measures LAP for one entity-date.
+ *
+ * `maxTokens` is generous by default because REASONING models emit a trace
+ * before their answer — muse-glimmer-30b spends ~570 tokens reaching a
+ * one-number reply, and a tight budget makes it return nothing at all. The
+ * headroom is free for ordinary models, which emit a stop token immediately
+ * after the number and never reach the ceiling.
+ */
+export async function measureLap(
+  model: string,
+  probe: LapProbe,
+  opts: { maxTokens?: number } = {}
+): Promise<LapResult> {
   getModel(model); // fail fast on an unknown model
   const res = await complete({
     model,
     system: SYSTEM,
     prompt: probePrompt(probe),
     temperature: 0,
-    maxTokens: 8,
+    maxTokens: opts.maxTokens ?? 2000,
   });
   const raw = res.text.trim();
   const parsed = parseScore(raw);
@@ -97,8 +109,12 @@ export async function measureLap(model: string, probe: LapProbe): Promise<LapRes
   return { ...probe, lap, raw };
 }
 
-export async function measureLapBatch(model: string, probes: LapProbe[]): Promise<LapResult[]> {
-  return Promise.all(probes.map((p) => measureLap(model, p)));
+export async function measureLapBatch(
+  model: string,
+  probes: LapProbe[],
+  opts: { maxTokens?: number } = {}
+): Promise<LapResult[]> {
+  return Promise.all(probes.map((p) => measureLap(model, p, opts)));
 }
 
 // ─── Calibration: find the cutoff from the collapse ────────────────────

@@ -112,11 +112,25 @@ export const MODELS: Record<string, ModelSpec> = {
   "muse-glimmer-30b": {
     id: "muse-glimmer-30b",
     baseUrl: process.env.MAC_LLAMASWAP_URL ?? "http://127.0.0.1:8085/v1",
-    cutoff: null,
+    // End of MAY 2024, not the collapse month, because erring LATE only costs
+    // samples while erring early admits contaminated ones. The probe measures
+    // day 15 of each month, so 2024-05-31 excludes the whole ambiguous
+    // transition month rather than assuming its second half was unknown.
+    cutoff: "2024-05-31",
+    cutoffSource:
+      "probeCutoff.ts 2026-08-16, 3 entities (AAPL/NVDA/TSLA), quarterly then " +
+      "monthly LAP sweep. Recall 0.50 through 2024-04, 0.17 at 2024-05, 0.00 from " +
+      "2024-06 onward and flat to 2026-07. Control dates 2021-06/2022-03 both 0.50.",
     contextTokens: 32768,
     host: "mac-studio",
     pinned: true,
-    notes: "Resident on the Mac. Costs nothing to call; verify it suits scoring before relying on it.",
+    notes:
+      "Resident on the Mac — costs nothing to call. REASONING model: emits " +
+      "reasoning_content before content, ~570 tokens and 10-50s for a one-line " +
+      "score, and /no_think does not disable it. Excellent at scoring (spearman " +
+      "0.939 vs human on subtle text, against a lexicon at -0.476) but suited to " +
+      "DEPTH not breadth. Reports LAP binarily — 0.5 when it knows a period, 0.0 " +
+      "when it does not — so the collapse is sharp but ungraded.",
   },
   "qwen3.6-35b-a3b": {
     id: "qwen3.6-35b-a3b",
