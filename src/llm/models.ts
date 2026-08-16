@@ -25,6 +25,24 @@
  * a study. Hosted APIs are updated silently; if the model behind a post-cutoff
  * evaluation shifts mid-study, the control evaporates and nothing warns you.
  * Reproducibility is the argument, cheap inference is a bonus.
+ *
+ * ── The serving layer is SHARED, and eviction is the default ──────────
+ * llama-swap holds one primary model per host and swaps on demand, so calling
+ * any non-resident model EVICTS whatever is loaded. Two models are pinned
+ * because other services depend on them being warm:
+ *
+ *   Mac Studio  muse-glimmer-30b
+ *   GX10        Qwen3-Coder-Next-UD-Q4_K_M  (ttl: -1)
+ *
+ * A batch scoring run over hundreds of names would otherwise thrash those
+ * continuously, and a ~15s reload each way is both slow and disruptive to
+ * whatever else is using them. This was not hypothetical: the harness's own
+ * smoke test evicted muse-glimmer-30b on its first run.
+ *
+ * `evicts` records the cost, and `assertSafeToCall` makes it an explicit
+ * decision rather than a side effect. The sanctioned way to do heavy batch work
+ * is the GX10's vLLM mode, which stops llama-swap on that host deliberately and
+ * restores it on exit — a decision taken once, not per request.
  */
 
 export interface ModelSpec {
@@ -43,6 +61,15 @@ export interface ModelSpec {
   cutoffSource?: string;
   /** Maximum context window in tokens, so callers can chunk deliberately. */
   contextTokens: number;
+  /** Which box serves it. Eviction is per host. */
+  host: "mac-studio" | "gx10";
+  /** True when other services depend on this staying warm. Never evict casually. */
+  pinned?: boolean;
+  /**
+   * The pinned model this call would evict, if any. Non-null means calling this
+   * model has a cost beyond its own latency.
+   */
+  evicts?: string;
   notes?: string;
 }
 
@@ -61,24 +88,43 @@ export const MODELS: Record<string, ModelSpec> = {
     baseUrl: process.env.GX10_VLLM_URL ?? "http://100.119.29.75:8000/v1",
     cutoff: null,
     contextTokens: 8192,
+    host: "gx10",
+    // vLLM mode stops llama-swap on the whole host, so Qwen3-Coder-Next goes
+    // down with it. That is the SANCTIONED way to batch: one deliberate switch
+    // and one restore, rather than an eviction per request.
+    evicts: "gx10/Qwen3-Coder-Next-UD-Q4_K_M (whole llama-swap stops)",
     notes:
       "Qwen2.5-32B-Instruct-AWQ on GX10 vLLM, ~500 tok/s at 64 concurrency. " +
       "Batch workhorse. 8k context does NOT fit a 10-K — chunk deliberately. " +
       "Serving it stops llama-swap on that host (systemd Conflicts=).",
   },
-  /** GX10's llama-swap, which is what runs there when vLLM is stopped. */
+  /** PINNED on GX10 (ttl: -1). Free to call — it is already resident. */
   "gx10/Qwen3-Coder-Next-UD-Q4_K_M": {
     id: "gx10/Qwen3-Coder-Next-UD-Q4_K_M",
     baseUrl: process.env.MAC_LLAMASWAP_URL ?? "http://127.0.0.1:8085/v1",
     cutoff: null,
     contextTokens: 32768,
-    notes: "Federated from GX10 via the Mac's llama-swap peers list.",
+    host: "gx10",
+    pinned: true,
+    notes: "Federated from GX10 via the Mac's llama-swap peers list. Already warm.",
+  },
+  /** PINNED on the Mac Studio. Free to call — it is already resident. */
+  "muse-glimmer-30b": {
+    id: "muse-glimmer-30b",
+    baseUrl: process.env.MAC_LLAMASWAP_URL ?? "http://127.0.0.1:8085/v1",
+    cutoff: null,
+    contextTokens: 32768,
+    host: "mac-studio",
+    pinned: true,
+    notes: "Resident on the Mac. Costs nothing to call; verify it suits scoring before relying on it.",
   },
   "qwen3.6-35b-a3b": {
     id: "qwen3.6-35b-a3b",
     baseUrl: process.env.MAC_LLAMASWAP_URL ?? "http://127.0.0.1:8085/v1",
     cutoff: null,
     contextTokens: 32768,
+    host: "mac-studio",
+    evicts: "muse-glimmer-30b",
     notes: "Mac Studio llama-swap. Longer context, lower throughput than vLLM.",
   },
   "gemma-4-31b-it-qat-ud-q4-k-xl": {
@@ -86,6 +132,8 @@ export const MODELS: Record<string, ModelSpec> = {
     baseUrl: process.env.MAC_LLAMASWAP_URL ?? "http://127.0.0.1:8085/v1",
     cutoff: null,
     contextTokens: 32768,
+    host: "mac-studio",
+    evicts: "muse-glimmer-30b",
     notes: "Mac Studio llama-swap. Different family — useful as a second opinion.",
   },
 };
@@ -99,6 +147,66 @@ export function getModel(key: string): ModelSpec {
     );
   }
   return m;
+}
+
+export class EvictionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EvictionError";
+  }
+}
+
+/**
+ * Throws when calling `model` would evict a pinned model.
+ *
+ * A warning would not do. Eviction is invisible at the call site — the request
+ * succeeds, just 15 seconds slower, and the damage lands on some other service
+ * that expected its model warm. The harness's own smoke test did exactly this.
+ *
+ * Pass `acknowledgeEviction` to proceed deliberately, and restore afterwards
+ * with `restorePinned`.
+ */
+export function assertSafeToCall(
+  model: ModelSpec,
+  opts: { acknowledgeEviction?: boolean } = {}
+): void {
+  if (!model.evicts || opts.acknowledgeEviction) return;
+  throw new EvictionError(
+    `Calling "${model.id}" on ${model.host} would evict ${model.evicts}, which is ` +
+    `pinned because other services rely on it being warm (~15s to reload each way).\n` +
+    `  Prefer a pinned model: ${pinnedFor(model.host) ?? "none on this host"}\n` +
+    `  For heavy batch work use the GX10 vLLM mode, which switches the host once ` +
+    `deliberately instead of evicting per request.\n` +
+    `  To proceed anyway pass { acknowledgeEviction: true } and call restorePinned() after.`
+  );
+}
+
+/** The pinned model on a host, if any. */
+export function pinnedFor(host: ModelSpec["host"]): string | null {
+  return Object.values(MODELS).find((m) => m.host === host && m.pinned)?.id ?? null;
+}
+
+/**
+ * Reloads a host's pinned model by issuing a minimal request against it.
+ *
+ * Call after any acknowledged eviction. llama-swap loads on demand, so touching
+ * the model is enough to make it resident again.
+ */
+export async function restorePinned(host: ModelSpec["host"]): Promise<boolean> {
+  const id = pinnedFor(host);
+  if (!id) return false;
+  const spec = MODELS[id];
+  try {
+    const res = await fetch(`${spec.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: id, messages: [{ role: "user", content: "ok" }], max_tokens: 1 }),
+      signal: AbortSignal.timeout(180_000),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 export class ContaminationError extends Error {

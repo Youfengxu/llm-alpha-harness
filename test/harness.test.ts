@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { assertScorable, isScorable, ContaminationError, type ModelSpec } from "../src/llm/models.js";
+import {
+  assertScorable, isScorable, ContaminationError,
+  assertSafeToCall, EvictionError, pinnedFor, MODELS, type ModelSpec,
+} from "../src/llm/models.js";
 import { parseScore } from "../src/llm/client.js";
 import {
   effectiveSampleSize, effectiveSampleCeiling, meanPairwiseCorrelation,
@@ -10,7 +13,7 @@ import { evaluate, registrationHash, type PreRegistration } from "../src/eval/cr
 import { calibrationCurve, estimateCutoff, contaminationTest, type LapResult } from "../src/eval/lap.js";
 
 const model = (cutoff: string | null): ModelSpec => ({
-  id: "test", baseUrl: "http://localhost/v1", cutoff, contextTokens: 8192,
+  id: "test", baseUrl: "http://localhost/v1", cutoff, contextTokens: 8192, host: "mac-studio",
 });
 
 // ─── Contamination guard ──────────────────────────────────────────────
@@ -308,5 +311,53 @@ describe("pre-registration", () => {
 
   it("keeps the hash stable when only the read date changes", () => {
     expect(registrationHash({ ...reg, registeredAt: "2027-01-01" })).toBe(registrationHash(reg));
+  });
+});
+
+// ─── Pinned-model eviction guard ──────────────────────────────────────
+
+describe("assertSafeToCall", () => {
+  const spec = (over: Partial<ModelSpec>): ModelSpec => ({
+    id: "m", baseUrl: "http://x/v1", cutoff: null, contextTokens: 8192,
+    host: "mac-studio", ...over,
+  });
+
+  it("allows a model that evicts nothing", () => {
+    expect(() => assertSafeToCall(spec({}))).not.toThrow();
+  });
+
+  it("allows a pinned model — it is already resident", () => {
+    expect(() => assertSafeToCall(spec({ pinned: true }))).not.toThrow();
+  });
+
+  it("refuses a call that would evict a pinned model", () => {
+    // A warning would be useless: eviction is invisible at the call site. The
+    // request still succeeds, just slower, and the damage lands elsewhere.
+    expect(() => assertSafeToCall(spec({ evicts: "muse-glimmer-30b" }))).toThrow(EvictionError);
+  });
+
+  it("proceeds when eviction is acknowledged explicitly", () => {
+    expect(() =>
+      assertSafeToCall(spec({ evicts: "muse-glimmer-30b" }), { acknowledgeEviction: true })
+    ).not.toThrow();
+  });
+
+  it("names the pinned model per host so the error can suggest an alternative", () => {
+    expect(pinnedFor("mac-studio")).toBe("muse-glimmer-30b");
+    expect(pinnedFor("gx10")).toBe("gx10/Qwen3-Coder-Next-UD-Q4_K_M");
+  });
+
+  it("registry: exactly one pinned model per host", () => {
+    for (const host of ["mac-studio", "gx10"] as const) {
+      const pinned = Object.values(MODELS).filter((m) => m.host === host && m.pinned);
+      expect(pinned).toHaveLength(1);
+    }
+  });
+
+  it("registry: every non-pinned Mac model declares what it evicts", () => {
+    // Forgetting this is how the guard silently stops protecting anything.
+    for (const m of Object.values(MODELS)) {
+      if (m.host === "mac-studio" && !m.pinned) expect(m.evicts).toBeTruthy();
+    }
   });
 });

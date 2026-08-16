@@ -65,6 +65,30 @@ pnpm verify        # typecheck + 38 tests
 Inference is local and OpenAI-compatible. Override endpoints with
 `MAC_LLAMASWAP_URL` / `GX10_VLLM_URL`.
 
+### The serving layer is shared — eviction is the default
+
+llama-swap holds one primary model per host and swaps on demand, so calling any
+non-resident model **evicts whatever is loaded**. Two are pinned because other
+services need them warm:
+
+| host | pinned model | free to call |
+|---|---|---|
+| Mac Studio | `muse-glimmer-30b` | yes — already resident |
+| GX10 | `gx10/Qwen3-Coder-Next-UD-Q4_K_M` | yes — `ttl: -1` |
+
+Calling anything else on those hosts costs ~15s each way **and** takes the
+pinned model away from whatever depends on it. A batch run over hundreds of
+names would thrash continuously.
+
+`assertSafeToCall` therefore **throws** rather than warns — eviction is invisible
+at the call site, since the request still succeeds, just slower, with the damage
+landing elsewhere. This harness's own smoke test evicted `muse-glimmer-30b` on
+its first run, which is why the guard exists.
+
+To proceed deliberately, pass `acknowledgeEviction: true` and call
+`restorePinned(host)` afterwards. For heavy batch work prefer the GX10 vLLM
+mode, which switches the host **once** by design instead of per request.
+
 **Local models are preferred for reproducibility, not cost.** A pinned local
 weight file has a fixed cutoff. Hosted APIs are updated silently, and if the
 model behind a post-cutoff evaluation shifts mid-study the control evaporates

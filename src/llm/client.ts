@@ -25,7 +25,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
-import { getModel, type ModelSpec } from "./models.js";
+import { getModel, assertSafeToCall, type ModelSpec } from "./models.js";
 
 const CACHE_DIR = process.env.LLM_CACHE_DIR ?? path.resolve(process.cwd(), ".cache/llm");
 
@@ -38,6 +38,11 @@ export interface CompletionOptions {
   maxTokens?: number;
   /** Bypass the cache read (still writes). For deliberately re-measuring. */
   refresh?: boolean;
+  /**
+   * Permit a call that evicts a pinned model. Deliberate, and the caller is
+   * responsible for restorePinned() afterwards.
+   */
+  acknowledgeEviction?: boolean;
   timeoutMs?: number;
 }
 
@@ -86,10 +91,14 @@ export async function complete(o: CompletionOptions): Promise<CompletionResult> 
   const key = cacheKey(spec, o);
   const file = path.join(CACHE_DIR, `${key}.json`);
 
+  // Cache hits are checked BEFORE the eviction guard: replaying a stored
+  // response touches no serving layer and so cannot evict anything.
   if (!o.refresh && fs.existsSync(file)) {
     const hit = JSON.parse(fs.readFileSync(file, "utf8")) as { text: string };
     return { text: hit.text, model: spec.id, cached: true, latencyMs: 0 };
   }
+
+  assertSafeToCall(spec, { acknowledgeEviction: o.acknowledgeEviction });
 
   await gate.acquire();
   const started = Date.now();
