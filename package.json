@@ -1,0 +1,18 @@
+{
+  "name": "llm-alpha-harness",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Evaluation harness for LLM-derived trading signals. Built to falsify them.",
+  "scripts": {
+    "verify": "tsc --noEmit && vitest run",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.9",
+    "tsx": "^4.20.6"
+  }
+}
