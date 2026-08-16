@@ -59,7 +59,7 @@ from a model card is exactly the kind of thing that looks like rigour and isn't.
 
 ```bash
 pnpm install
-pnpm verify        # typecheck + 38 tests
+pnpm verify        # typecheck + 45 tests
 ```
 
 Inference is local and OpenAI-compatible. Override endpoints with
