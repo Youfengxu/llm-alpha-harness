@@ -76,6 +76,18 @@ is 0 and there is nothing for skill to co-vary with. That is the expected and
 correct outcome, not a defect: the test's job there is confirming you really are
 past the cutoff.
 
+## Models measured so far
+
+| model | scoring (subtle ρ) | cutoff | 72-probe sweep |
+|---|---|---|---|
+| `muse-glimmer-30b` (Mac, pinned) | **0.939** | 2024-05-31 | 38 min |
+| `gpt-oss-120b` (GX10 vLLM) | 0.870 | 2024-06-30 | **91 s** |
+
+Both clear the fitness bar; the lexicon scores **−0.476** on the same subtle
+cases. The 30B edges the 120B on reading quality, but on 9 subtle cases that gap
+is well inside noise and should not be treated as a ranking. The ~25× throughput
+difference is not noise, and it is what decides which model does batch work.
+
 ## Setup
 
 ```bash
@@ -130,7 +142,7 @@ a bare `ECONNREFUSED` from the middle of a long batch.
 
 Phase 0 core is built and tested. Not yet built:
 
-- Cutoffs for the remaining models (only `muse-glimmer-30b` is established)
+- Cutoffs for the remaining models (`muse-glimmer-30b` and `gpt-oss-120b` established)
 - Point-in-time data connectors (SEC EDGAR is free; news and transcripts are not)
 - The first study (Option B — earnings events, incremental over post-earnings-announcement drift)
 

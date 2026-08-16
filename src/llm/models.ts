@@ -98,6 +98,38 @@ export const MODELS: Record<string, ModelSpec> = {
       "Batch workhorse. 8k context does NOT fit a 10-K — chunk deliberately. " +
       "Serving it stops llama-swap on that host (systemd Conflicts=).",
   },
+  /**
+   * gpt-oss-120b on GX10 vLLM. 117B total / 5.1B active MoE, native MXFP4.
+   *
+   * The batch workhorse: published GX10 figures are ~6,700 tok/s PREFILL at
+   * concurrency 10 against ~160 tok/s generation, and this harness's workload is
+   * prefill-dominated (long disclosure in, one score out). The 273 GB/s memory
+   * bandwidth punishes decode, which is exactly why an MoE activating 4 of 128
+   * experts suits this box where a dense model of the same size would crawl.
+   *
+   * Serving it stops llama-swap on GX10 entirely, taking Coder-Next — the
+   * orchestrator's worker and opencode's default — offline. That is a deliberate
+   * once-per-session switch, not a per-request cost.
+   */
+  "gpt-oss-120b": {
+    id: "gpt-oss-120b",
+    baseUrl: process.env.GX10_VLLM_URL ?? "http://100.119.29.75:8000/v1",
+    // End of JUNE 2024. 2024-06 measured 0.17 — partial recall — so the true
+    // boundary falls inside that month; month-end excludes all of it. Erring
+    // late costs samples, erring early admits contaminated ones.
+    cutoff: "2024-06-30",
+    cutoffSource:
+      "probeCutoff.ts 2026-08-16, 3 entities (AAPL/NVDA/TSLA). Control 2021-06/" +
+      "2022-03 both 1.00. Recall 0.50-0.83 through 2024-05, 0.17 at 2024-06, " +
+      "0.00 from 2024-07 and flat to 2026-07. 72 probes in 91s on vLLM.",
+    contextTokens: 16384,
+    host: "gx10",
+    evicts: "gx10/Qwen3-Coder-Next-UD-Q4_K_M (whole llama-swap stops)",
+    notes:
+      "vLLM 0.24, mxfp4 auto-detected from config.json, fp8 KV, async scheduling. " +
+      "Model supports 131072 ctx but is served at 16384 — KV at full length x 64 " +
+      "sequences would dominate memory for no benefit on scoring prompts.",
+  },
   /** PINNED on GX10 (ttl: -1). Free to call — it is already resident. */
   "gx10/Qwen3-Coder-Next-UD-Q4_K_M": {
     id: "gx10/Qwen3-Coder-Next-UD-Q4_K_M",
@@ -184,6 +216,12 @@ export function assertSafeToCall(
   model: ModelSpec,
   opts: { acknowledgeEviction?: boolean } = {}
 ): void {
+  // LLM_ACK_EVICTION=1 means the operator has ALREADY made the switch
+  // deliberately at the service level — e.g. `systemctl start vllm`, which stops
+  // llama-swap on that host once rather than per request. The guard exists to
+  // catch an ACCIDENTAL eviction; once the host has been switched on purpose
+  // there is nothing further to evict and blocking every call is just noise.
+  if (process.env.LLM_ACK_EVICTION === "1") return;
   if (!model.evicts || opts.acknowledgeEviction) return;
   throw new EvictionError(
     `Calling "${model.id}" on ${model.host} would evict ${model.evicts}, which is ` +
