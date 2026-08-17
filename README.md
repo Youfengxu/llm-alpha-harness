@@ -88,6 +88,45 @@ cases. The 30B edges the 120B on reading quality, but on 9 subtle cases that gap
 is well inside noise and should not be treated as a ranking. The ~25× throughput
 difference is not noise, and it is what decides which model does batch work.
 
+## Data: SEC EDGAR
+
+Point-in-time **by construction** — every filing carries the moment the SEC
+accepted it, so there is no question of what was knowable when. Free, and
+complete back to 1994.
+
+```bash
+export SEC_USER_AGENT="your-project you@example.com"   # required; SEC blocks anonymous traffic
+npx tsx scripts/edgarSmoke.ts
+```
+
+Measured on AAPL / NVDA / MSFT:
+
+| | |
+|---|---|
+| filings retrieved | 2,240 / 2,464 / 4,481 back to 1994 |
+| pages followed | 2 / 2 / 3 |
+| 8-K Item 2.02 (earnings) | 94 / 93 / 90 |
+| accepted since 2024-07 | 26 events |
+| **rolled to a later session** | **26 of 26** |
+
+That last row is the point. Every earnings release landed after the close, so
+joining on `filingDate` would trade a full session early on all 26 — lookahead
+bias dressed as a date join. `nextSessionAfter` rolls conservatively, because
+SEC stamps carry `Z` while the agency documents Eastern, an ambiguity worth
+about a session.
+
+Two traps the connector handles, both found by running it:
+
+- **Pagination.** `filings.recent` caps at ~1000 and older history sits in
+  separate pages under `filings.files`. Reading only `recent` looks complete and
+  silently truncates — for MSFT it would have lost two of three pages.
+- **The 8-K body is not the earnings release.** The release is Exhibit 99.1; the
+  body is cross-reference wrapped in XBRL cover-page tagging. Naming is
+  inconsistent (`ex-99.1.htm`, `ex991.htm`, `exhibit99_1.htm`,
+  `a8-kex991q3202606272026.htm`), so matching is unanchored, and
+  `findEarningsExhibit` returns `isExhibit: false` on a miss so callers DROP the
+  event rather than score noise that looks like a successful fetch.
+
 ## Setup
 
 ```bash
@@ -143,7 +182,7 @@ a bare `ECONNREFUSED` from the middle of a long batch.
 Phase 0 core is built and tested. Not yet built:
 
 - Cutoffs for the remaining models (`muse-glimmer-30b` and `gpt-oss-120b` established)
-- Point-in-time data connectors (SEC EDGAR is free; news and transcripts are not)
+- Price data, to join returns onto filing events
 - The first study (Option B — earnings events, incremental over post-earnings-announcement drift)
 
 ## Design rules

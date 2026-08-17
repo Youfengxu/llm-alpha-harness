@@ -11,6 +11,7 @@ import {
 import { lexiconSentiment, numericSurprise, incrementalR2 } from "../src/eval/baseline.js";
 import { evaluate, registrationHash, type PreRegistration } from "../src/eval/criteria.js";
 import { calibrationCurve, estimateCutoff, contaminationTest, type LapResult } from "../src/eval/lap.js";
+import { nextSessionAfter, filterFilings, htmlToText, findEarningsExhibit, type Filing } from "../src/data/edgar.js";
 
 const model = (cutoff: string | null): ModelSpec => ({
   id: "test", baseUrl: "http://localhost/v1", cutoff, contextTokens: 8192, host: "mac-studio",
@@ -359,5 +360,113 @@ describe("assertSafeToCall", () => {
     for (const m of Object.values(MODELS)) {
       if (m.host === "mac-studio" && !m.pinned) expect(m.evicts).toBeTruthy();
     }
+  });
+});
+
+// ─── EDGAR point-in-time discipline ───────────────────────────────────
+
+describe("nextSessionAfter", () => {
+  it("keeps a pre-market filing on the same day", () => {
+    // 10:01Z ≈ 06:01 ET — well before the open.
+    expect(nextSessionAfter("2026-07-31T10:01:02.000Z")).toBe("2026-07-31");
+  });
+
+  it("rolls a late-day filing to the next session", () => {
+    // 22:30Z is after the close on any reading of the timestamp.
+    expect(nextSessionAfter("2026-08-13T22:30:20.000Z")).toBe("2026-08-14");
+  });
+
+  it("rolls conservatively near the boundary, because the timezone is ambiguous", () => {
+    // SEC stamps carry Z but the agency documents Eastern. 18:30Z is either
+    // 14:30 ET (before close) or 18:30 ET (after). We assume the worse case.
+    expect(nextSessionAfter("2026-08-12T18:30:00.000Z")).toBe("2026-08-13");
+  });
+
+  it("skips weekends", () => {
+    // 2026-08-14 is a Friday; a late filing lands on Monday the 17th.
+    expect(nextSessionAfter("2026-08-14T23:00:00.000Z")).toBe("2026-08-17");
+    // Saturday filing → Monday.
+    expect(nextSessionAfter("2026-08-15T10:00:00.000Z")).toBe("2026-08-17");
+  });
+
+  it("throws on an unparseable timestamp rather than silently returning a date", () => {
+    expect(() => nextSessionAfter("not-a-time")).toThrow();
+  });
+});
+
+describe("filterFilings", () => {
+  const f = (over: Partial<Filing>): Filing => ({
+    cik: 1, accessionNumber: "a", form: "8-K", filingDate: "2026-01-02",
+    reportDate: "", acceptanceDateTime: "2026-01-02T12:00:00.000Z", items: "",
+    primaryDocument: "d.htm", isXBRL: false, size: 0, ...over,
+  });
+
+  it("matches item codes exactly, not by substring", () => {
+    // "2.02" must not match inside "12.02" — a substring test would.
+    expect(filterFilings([f({ items: "12.02" })], { item: "2.02" })).toHaveLength(0);
+    expect(filterFilings([f({ items: "2.02,9.01" })], { item: "2.02" })).toHaveLength(1);
+    expect(filterFilings([f({ items: "9.01, 2.02" })], { item: "2.02" })).toHaveLength(1);
+  });
+
+  it("filters on acceptance time, not filing date", () => {
+    const late = f({ filingDate: "2026-01-02", acceptanceDateTime: "2026-01-02T23:00:00.000Z" });
+    expect(filterFilings([late], { from: "2026-01-02T00:00:00.000Z" })).toHaveLength(1);
+    expect(filterFilings([late], { to: "2026-01-02T12:00:00.000Z" })).toHaveLength(0);
+  });
+
+  it("filters by form", () => {
+    const rows = [f({ form: "8-K" }), f({ form: "10-Q" })];
+    expect(filterFilings(rows, { forms: ["10-Q"] })).toHaveLength(1);
+  });
+});
+
+describe("htmlToText", () => {
+  it("drops script and style content so inline JS never reaches the model", () => {
+    const out = htmlToText("<p>Revenue grew</p><script>var x=1;</script><style>.a{}</style>");
+    expect(out).toContain("Revenue grew");
+    expect(out).not.toContain("var x");
+    expect(out).not.toContain(".a{");
+  });
+
+  it("decodes the entities filings actually use", () => {
+    expect(htmlToText("<p>A&nbsp;&amp;&nbsp;B &lt;tag&gt;</p>")).toBe("A & B <tag>");
+  });
+});
+
+describe("findEarningsExhibit", () => {
+  const idx = (names: Array<[string, number]>) => names.map(([name, size]) => ({ name, size }));
+
+  it("finds an exhibit whose name embeds ex99 mid-string", () => {
+    // The real Apple case an anchored /^ex99/ regex silently missed.
+    const r = findEarningsExhibit(
+      idx([["aapl-20260730.htm", 38350], ["a8-kex991q3202606272026.htm", 173484], ["R1.htm", 55284]]),
+      "aapl-20260730.htm"
+    );
+    expect(r).toEqual({ name: "a8-kex991q3202606272026.htm", isExhibit: true });
+  });
+
+  it("handles the common naming variants", () => {
+    for (const n of ["ex-99.1.htm", "ex991.htm", "exhibit99_1.htm", "EX-99.1.HTM"]) {
+      expect(findEarningsExhibit(idx([[n, 1000]]), "body.htm").name).toBe(n);
+    }
+  });
+
+  it("prefers 99.1 over other 99.x exhibits even when smaller", () => {
+    const r = findEarningsExhibit(
+      idx([["ex-99.2.htm", 99999], ["ex-99.1.htm", 1000]]), "body.htm"
+    );
+    expect(r.name).toBe("ex-99.1.htm");
+  });
+
+  it("ignores XBRL rendering artifacts that are .htm but never prose", () => {
+    const r = findEarningsExhibit(idx([["R1.htm", 55284], ["MetaLinks.json", 1]]), "body.htm");
+    expect(r.isExhibit).toBe(false);
+  });
+
+  it("signals a fallback rather than silently returning the 8-K body", () => {
+    // Callers must be able to DROP the event: the body is XBRL cover-page
+    // tagging, which looks like a successful fetch and poisons a study.
+    const r = findEarningsExhibit(idx([["aapl-20260730.htm", 38350]]), "aapl-20260730.htm");
+    expect(r).toEqual({ name: "aapl-20260730.htm", isExhibit: false });
   });
 });
