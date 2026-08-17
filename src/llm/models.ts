@@ -26,6 +26,12 @@
  * evaluation shifts mid-study, the control evaporates and nothing warns you.
  * Reproducibility is the argument, cheap inference is a bonus.
  *
+ * ── Endpoints are host NAMES, overridable by environment ──────────────
+ * Defaults use `gx10` and `127.0.0.1`, resolved locally (Tailscale MagicDNS in
+ * this case). Set GX10_VLLM_URL / MAC_LLAMASWAP_URL for any other topology.
+ * Baking a specific private IP into a published repo is both fragile and
+ * needless disclosure of a network layout.
+ *
  * ── The serving layer is SHARED, and eviction is the default ──────────
  * llama-swap holds one primary model per host and swaps on demand, so calling
  * any non-resident model EVICTS whatever is loaded. Two models are pinned
@@ -85,7 +91,7 @@ export interface ModelSpec {
 export const MODELS: Record<string, ModelSpec> = {
   qwen32: {
     id: "qwen32",
-    baseUrl: process.env.GX10_VLLM_URL ?? "http://100.119.29.75:8000/v1",
+    baseUrl: process.env.GX10_VLLM_URL ?? "http://gx10:8000/v1",
     cutoff: null,
     contextTokens: 8192,
     host: "gx10",
@@ -113,7 +119,7 @@ export const MODELS: Record<string, ModelSpec> = {
    */
   "gpt-oss-120b": {
     id: "gpt-oss-120b",
-    baseUrl: process.env.GX10_VLLM_URL ?? "http://100.119.29.75:8000/v1",
+    baseUrl: process.env.GX10_VLLM_URL ?? "http://gx10:8000/v1",
     // End of JUNE 2024. 2024-06 measured 0.17 — partial recall — so the true
     // boundary falls inside that month; month-end excludes all of it. Erring
     // late costs samples, erring early admits contaminated ones.
