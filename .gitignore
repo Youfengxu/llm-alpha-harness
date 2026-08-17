@@ -4,3 +4,7 @@ dist/
 .env
 .env.local
 .DS_Store
+
+# Access logs written by terminal tooling into the cwd. They carry Tailscale
+# IPs, so they must never be committed.
+even-terminal-*.log
