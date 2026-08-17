@@ -127,6 +127,46 @@ Two traps the connector handles, both found by running it:
   `findEarningsExhibit` returns `isExhibit: false` on a miss so callers DROP the
   event rather than score noise that looks like a successful fetch.
 
+## Prices and the event set
+
+`src/data/prices.ts` supplies daily bars and event-study returns, and
+`scripts/eventSetSmoke.ts` assembles the whole Option B pipeline with no LLM in
+it — deliberately, because if the event set is thin or the drift is absent, no
+amount of model quality rescues the study.
+
+Three decisions that decide whether such a study measures anything:
+
+- **Adjusted closes.** A 2-for-1 split reads as −50% on raw prices, so every
+  split would surface as a large negative surprise.
+- **Market-adjusted drift.** Over 20 sessions the index move swamps anything
+  firm-specific; unadjusted, a study largely measures whether the market rose.
+  Beta is fixed at 1 on purpose — beta fitted on a short pre-event window adds
+  more noise than the bias it removes.
+- **Sessions, not calendar days.** Counting calendar days shortens every window
+  spanning a weekend and gives Monday events a different horizon from Thursday's.
+
+Measured on 8 mega-caps, 2023 onward, 20-session drift:
+
+```
+119 events · 65 usable (post-cutoff, full window)
+
+positive reaction  n=27  mean drift-adj  +0.91%
+negative reaction  n=38  mean drift-adj  -1.61%
+spread +2.52%   t=2.04  p=0.046   (naive, assumes independence)
+
+  rho    n_eff      p
+  0.00    65.0    0.046
+  0.05    15.5    0.337   <- no longer significant
+  0.10     8.8    0.476
+  0.20     4.7    0.615
+```
+
+**That sensitivity table is the point.** The naive p-value treats 65 events
+across 8 co-moving mega-caps as independent; at a residual correlation of just
+0.05 the result evaporates. This is the predecessor project's central error made
+visible before it can be made again — and it is why the first real study needs a
+wide cross-section, not more quarters of the same eight names.
+
 ## Setup
 
 ```bash
@@ -182,7 +222,7 @@ a bare `ECONNREFUSED` from the middle of a long batch.
 Phase 0 core is built and tested. Not yet built:
 
 - Cutoffs for the remaining models (`muse-glimmer-30b` and `gpt-oss-120b` established)
-- Price data, to join returns onto filing events
+- The study itself — every input it needs now exists
 - The first study (Option B — earnings events, incremental over post-earnings-announcement drift)
 
 ## Design rules

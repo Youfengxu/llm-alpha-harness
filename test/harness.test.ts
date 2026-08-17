@@ -12,6 +12,7 @@ import { lexiconSentiment, numericSurprise, incrementalR2 } from "../src/eval/ba
 import { evaluate, registrationHash, type PreRegistration } from "../src/eval/criteria.js";
 import { calibrationCurve, estimateCutoff, contaminationTest, type LapResult } from "../src/eval/lap.js";
 import { nextSessionAfter, filterFilings, htmlToText, findEarningsExhibit, type Filing } from "../src/data/edgar.js";
+import { eventReturns, sessionIndexAtOrAfter, type Bar } from "../src/data/prices.js";
 
 const model = (cutoff: string | null): ModelSpec => ({
   id: "test", baseUrl: "http://localhost/v1", cutoff, contextTokens: 8192, host: "mac-studio",
@@ -468,5 +469,100 @@ describe("findEarningsExhibit", () => {
     // tagging, which looks like a successful fetch and poisons a study.
     const r = findEarningsExhibit(idx([["aapl-20260730.htm", 38350]]), "aapl-20260730.htm");
     expect(r).toEqual({ name: "aapl-20260730.htm", isExhibit: false });
+  });
+});
+
+// ─── Event-study returns ──────────────────────────────────────────────
+
+describe("eventReturns", () => {
+  /** Sessions are consecutive weekdays; adjClose drives every return. */
+  const mk = (prices: number[], start = "2026-03-02"): Bar[] => {
+    const out: Bar[] = [];
+    const d = new Date(`${start}T00:00:00Z`);
+    for (const p of prices) {
+      while (d.getUTCDay() === 0 || d.getUTCDay() === 6) d.setUTCDate(d.getUTCDate() + 1);
+      out.push({
+        date: d.toISOString().slice(0, 10),
+        open: p, high: p, low: p, close: p, adjClose: p, volume: 1,
+      });
+      d.setUTCDate(d.getUTCDate() + 1);
+    }
+    return out;
+  };
+
+  it("splits announcement from drift", () => {
+    // 100, 110 (reaction), then drifting to 121 over 3 sessions.
+    const bars = mk([100, 110, 115, 118, 121]);
+    const r = eventReturns(bars, bars[1].date, 3);
+    expect(r.announcement).toBeCloseTo(0.10, 10);
+    expect(r.drift).toBeCloseTo(121 / 110 - 1, 10);
+  });
+
+  it("subtracts the benchmark over the identical sessions", () => {
+    const bars = mk([100, 110, 121]);
+    const bench = mk([100, 100, 110]);
+    const r = eventReturns(bars, bars[1].date, 1, bench);
+    expect(r.drift).toBeCloseTo(0.10, 10);
+    // Asset +10%, market +10% → nothing firm-specific.
+    expect(r.driftMarketAdj).toBeCloseTo(0, 10);
+  });
+
+  it("returns null instead of a truncated window", () => {
+    // A short window silently compared against a full one makes recency look
+    // like signal.
+    const bars = mk([100, 110, 115]);
+    const r = eventReturns(bars, bars[1].date, 60);
+    expect(r.drift).toBeNull();
+    expect(r.driftSessions).toBe(1);
+  });
+
+  it("returns null when the session is past the data", () => {
+    expect(eventReturns(mk([100, 101]), "2030-01-01", 5).drift).toBeNull();
+  });
+
+  it("has no announcement return when the event is the first bar", () => {
+    const bars = mk([100, 110]);
+    expect(eventReturns(bars, bars[0].date, 1).announcement).toBeNull();
+  });
+
+  it("counts SESSIONS, not calendar days, across a weekend", () => {
+    // 5 sessions from a Friday must reach the following Friday, not Wednesday.
+    const bars = mk([100, 101, 102, 103, 104, 105, 106], "2026-03-06"); // Fri start
+    const r = eventReturns(bars, bars[0].date, 5);
+    expect(r.driftSessions).toBe(5);
+    expect(r.drift).toBeCloseTo(105 / 100 - 1, 10);
+  });
+
+  it("aligns the benchmark on dates, not indices", () => {
+    // Asset halted mid-window: fewer bars than the index over the same dates.
+    const bench = mk([100, 100, 100, 110]);
+    const asset: Bar[] = [bench[0], bench[3]].map((b, i) => ({
+      ...b, adjClose: i === 0 ? 100 : 120, close: i === 0 ? 100 : 120,
+    }));
+    const r = eventReturns(asset, asset[0].date, 1, bench);
+    expect(r.drift).toBeCloseTo(0.20, 10);
+    // Index-aligning would compare against bench[1] (0%) instead of bench[3] (+10%).
+    expect(r.driftMarketAdj).toBeCloseTo(0.10, 10);
+  });
+
+  it("uses adjClose, so a split is not read as a crash", () => {
+    const bars = mk([100, 110, 121]);
+    // Raw close halves on a 2:1 split while adjClose stays continuous.
+    bars[2] = { ...bars[2], close: 60.5, adjClose: 121 };
+    expect(eventReturns(bars, bars[1].date, 1).drift).toBeCloseTo(0.10, 10);
+  });
+});
+
+describe("sessionIndexAtOrAfter", () => {
+  const bars: Bar[] = ["2026-03-02", "2026-03-03", "2026-03-05"].map((date) => ({
+    date, open: 1, high: 1, low: 1, close: 1, adjClose: 1, volume: 1,
+  }));
+
+  it("snaps forward to the next available session", () => {
+    expect(sessionIndexAtOrAfter(bars, "2026-03-04")).toBe(2);
+  });
+
+  it("returns -1 past the end rather than clamping to the last bar", () => {
+    expect(sessionIndexAtOrAfter(bars, "2026-04-01")).toBe(-1);
   });
 });
