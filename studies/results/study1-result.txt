@@ -1,0 +1,72 @@
+
+════════════════════════════════════════════════════════════════════════════════════════════
+796 scored events · 98 tickers
+LLM score: mean 0.140 sd 0.514 · lexicon: mean 0.177 sd 0.280
+drift: mean -0.23% sd 8.44%
+════════════════════════════════════════════════════════════════════════════════════════════
+
+rank correlation with market-adjusted drift
+  LLM      +0.0192
+  lexicon  -0.0574
+  LLM vs lexicon agreement: r = 0.228
+
+quintiles by LLM score (n=159 each)
+  bottom  -0.84%
+  top     -0.94%
+  spread  -0.10%
+
+significance
+  naive           t=0.69  p=0.491   (n=796)
+  rho estimate    0.000 (from 9 quarterly cohorts)
+  effective n     796.0
+  DISCOUNTED      t=0.69  p=0.491
+
+incremental information
+  LLM over lexicon   R2 += 0.0023
+  lexicon over LLM   R2 += 0.0062
+
+══════════════════════════════════════════════════════════════════════════════
+Study 1 — earnings-release text vs post-earnings drift   [registration 8d14cf344c50]
+hypothesis: An LLM score of the Exhibit 99.1 earnings release carries information about market-adjusted drift over the following 20 sessions that a finance lexicon does not.
+prior: 30% · registered 2026-08-18
+══════════════════════════════════════════════════════════════════════════════
+PASS  direction                            0.0192  (need ≥ 0)
+      Rank correlation between LLM score and market-adjusted drift is positive.
+FAIL  significance_eff                     0.4908  (need ≤ 0.05)
+      p < 0.05 after discounting for cross-sectional correlation.
+FAIL  incremental_r2                       0.0023  (need ≥ 0.005)
+      Incremental R-squared of the LLM score over the lexicon exceeds 0.005.
+FAIL  quintile_spread                     -0.0010  (need ≥ 0)
+      Top-quintile minus bottom-quintile mean drift is positive.
+──────────────────────────────────────────────────────────────────────────────
+FAILED — 1/4 criteria met (all are required)
+abandon condition: incremental R-squared over the lexicon is not positive — comprehension adds nothing over cheap text features
+══════════════════════════════════════════════════════════════════════════════
+
+─────────────────────────────────────────────────────────────────────────────
+NOTES ON THIS RESULT
+
+1. The rho estimator returned 0.000, so no correlation discounting was applied.
+   That estimator is not meaningful as written: it compares arbitrary events
+   across quarterly cohorts by position, which is not a cross-sectional
+   correlation. It is IMMATERIAL here -- the naive p is already 0.491, and
+   discounting can only raise it. It must be fixed before any positive result
+   is reported.
+
+2. Universe skew. Despite the intent to include mid-caps, the 98 tickers with
+   usable events are overwhelmingly S&P 100 constituents. The published effect
+   concentrates in SMALL caps and negative news, so this tests where it is
+   weakest.
+
+3. Truncation. Median release length was 31,757 chars against a 30,000-char cap,
+   so roughly half of releases lost their tail. That tail is mostly financial
+   tables with the narrative front-loaded, but it is a real constraint.
+
+4. Alpha decay. Lopez-Lira & Tang report the effect declining as LLM adoption
+   rises. This sample is 2024-07 to 2026-08, entirely after the mass-adoption
+   period their decay result covers.
+
+5. What was NOT falsified: the model READS well. The scoring-fitness pre-flight
+   measured rank correlation 0.939 against human judgement on subtle text, where
+   a finance lexicon scored -0.476. Comprehension is real; it simply does not
+   translate into predictive content about drift in this sample.
