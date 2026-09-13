@@ -15,7 +15,7 @@ lost, not the model.
 
 ## Why this exists before any strategy
 
-A BTC trading system was taken through thirteen method families — eight threshold
+In trying to enhance the system in the bitcoin-training-tool repo, a V2 BTC trading system was taken through thirteen method families — eight threshold
 rules, HMMs at 2/3/4 states, BOCPD at four hazard rates, GMM clustering, and exit
 policy optimisation. Every one failed. The instructive part is *how* they failed:
 
