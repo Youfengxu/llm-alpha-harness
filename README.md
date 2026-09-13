@@ -2,6 +2,12 @@
 
 **Phase 0 of the LLM trading research programme: the evaluation harness.**
 
+> **Research tooling, not trading advice.** This is an evaluation harness for studying whether language models
+> carry any predictive signal. It makes no recommendation to buy or sell anything, and no result produced by it
+> should be read as one. MIT licensed, no warranty.
+
+
+
 This repository does not contain a trading strategy. It contains the apparatus
 for deciding whether one is real — built first, and deliberately, because the
 predecessor project established that the harness is where results are won and
